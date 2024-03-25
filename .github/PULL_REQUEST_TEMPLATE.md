@@ -6,7 +6,7 @@ _Summary of the change in this repository_
 
 ## Type of change
 
-- [ ] Chore (readme update / pipeline update / etc)
+- [ ] Chore (README.md update / pipeline update / etc)
 - [ ] Bug fix **(non-breaking change which fixes an issue)**
 - [ ] Vulnerability fix **(non-breaking change without code changes)**
 - [ ] New feature **(non-breaking change which adds functionality)**
@@ -25,7 +25,7 @@ _Summary of the change in this repository_
 - [ ] **Requires infrastructure alignment?**
 - [ ] **Requires migration?**
 - [ ] **Has Datadog monitoring?**
-- [ ] **No new HIGH / CRITICAL vulnerabilities? _(FIPS ready / Updated know_vulnerabilities.md)_**
+- [ ] **No new HIGH / CRITICAL vulnerabilities? _(FIPS ready / Updated KNOW_VULNERABILITIES.md)_**
 
 ## Links to related PRs / Migration scripts / Documentation
 
