@@ -1,0 +1,162 @@
+# Validates GitHub App credentials and permissions before PAT cutover.
+# See docs/github-app-migration.md
+name: Test GitHub App migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_profile:
+        description: Which app credentials to exercise
+        required: true
+        type: choice
+        options:
+          - ci-reader
+          - cicd-checkout
+          - release-publisher
+          - pr-bot
+      cross_repo:
+        description: Cross-repo checkout target (owner/name)
+        required: true
+        default: argonsecurity/cicd
+      run_write_tests:
+        description: Push branch + tag to THIS repo (use only on disposable test repos)
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  test-github-app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      metadata: read
+    steps:
+      - name: Generate installation token (CI Reader)
+        if: inputs.app_profile == 'ci-reader'
+        id: app_token
+        uses: ./.github/actions/github-app-auth
+        with:
+          app-id: ${{ secrets.ARGON_CI_READER_APP_ID }}
+          private-key: ${{ secrets.ARGON_CI_READER_PRIVATE_KEY }}
+          owner: argonsecurity
+
+      - name: Generate installation token (CICD Checkout)
+        if: inputs.app_profile == 'cicd-checkout'
+        id: app_token
+        uses: ./.github/actions/github-app-auth
+        with:
+          app-id: ${{ secrets.ARGON_CICD_CHECKOUT_APP_ID }}
+          private-key: ${{ secrets.ARGON_CICD_CHECKOUT_PRIVATE_KEY }}
+          owner: argonsecurity
+          repositories: cicd
+
+      - name: Generate installation token (Release Publisher)
+        if: inputs.app_profile == 'release-publisher'
+        id: app_token
+        uses: ./.github/actions/github-app-auth
+        with:
+          app-id: ${{ secrets.ARGON_RELEASE_PUBLISHER_APP_ID }}
+          private-key: ${{ secrets.ARGON_RELEASE_PUBLISHER_PRIVATE_KEY }}
+          owner: argonsecurity
+
+      - name: Generate installation token (PR Bot)
+        if: inputs.app_profile == 'pr-bot'
+        id: app_token
+        uses: ./.github/actions/github-app-auth
+        with:
+          app-id: ${{ secrets.ARGON_PR_BOT_APP_ID }}
+          private-key: ${{ secrets.ARGON_PR_BOT_PRIVATE_KEY }}
+          owner: argonsecurity
+
+      - name: Print safe token metadata (never log full token)
+        shell: bash
+        env:
+          TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "installation-id=${{ steps.app_token.outputs.installation-id }}"
+          python3 << 'PY'
+          import os, json, base64, sys
+          token = os.environ.get("TOKEN", "")
+          if not token:
+              print("ERROR: no token output; check org secrets for selected profile", file=sys.stderr)
+              sys.exit(1)
+          parts = token.split(".")
+          if len(parts) < 2:
+              print("Token is not a JWT; skipping decode")
+              sys.exit(0)
+          payload = parts[1] + "=" * (-len(parts[1]) % 4)
+          data = json.loads(base64.urlsafe_b64decode(payload))
+          safe = {k: data[k] for k in (
+              "iat", "exp", "iss", "repository", "repository_id", "permissions", "sub"
+          ) if k in data}
+          print("JWT claims (safe subset):")
+          print(json.dumps(safe, indent=2))
+          PY
+
+      - name: Checkout this repository with App token
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app_token.outputs.token }}
+
+      - name: Checkout cross-repo target
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.cross_repo }}
+          path: cross-repo-checkout
+          token: ${{ steps.app_token.outputs.token }}
+
+      - name: Git clone via HTTPS using App token
+        shell: bash
+        env:
+          TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          owner_repo="${{ inputs.cross_repo }}"
+          rm -rf /tmp/git-clone-test
+          git clone "https://x-access-token:${TOKEN}@github.com/${owner_repo}.git" /tmp/git-clone-test
+          ls -la /tmp/git-clone-test | head -20
+
+      - name: GitHub API smoke test (read)
+        shell: bash
+        env:
+          TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          owner_repo="${{ inputs.cross_repo }}"
+          code=$(curl -sS -o /tmp/gh-api.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${owner_repo}")
+          echo "GET /repos/${owner_repo} HTTP ${code}"
+          head -c 500 /tmp/gh-api.json
+          echo ""
+          test "$code" = "200" || exit 1
+
+      - name: Write tests (branch + tag)
+        if: inputs.run_write_tests == true
+        shell: bash
+        env:
+          TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="gh-app-migration-test/${GITHUB_RUN_ID}"
+          git checkout -b "$branch"
+          echo "run_id=${GITHUB_RUN_ID}" > ".github-app-migration-test.txt"
+          git add ".github-app-migration-test.txt"
+          git commit -m "test: github app migration smoke [skip ci]"
+          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${branch}"
+          tag="gh-app-test-${GITHUB_RUN_ID}"
+          git tag -a "$tag" -m "github app migration test tag"
+          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${tag}"
+
+      - name: Summary
+        shell: bash
+        run: |
+          echo "Profile: ${{ inputs.app_profile }}"
+          echo "Cross-repo: ${{ inputs.cross_repo }}"
+          echo "Write tests: ${{ inputs.run_write_tests }}"
+          echo "SUCCESS: App token, checkout, clone, and API read validated."
