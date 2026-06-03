@@ -1,0 +1,38 @@
+name: GitHub App installation token
+description: Generate a short-lived GitHub App installation access token (standard auth for all Argon CI).
+
+inputs:
+  app-id:
+    description: GitHub App ID (numeric string from app settings page)
+    required: true
+  private-key:
+    description: GitHub App private key PEM (full contents, including BEGIN/END lines)
+    required: true
+  owner:
+    description: Organization or user that installed the app (e.g. argonsecurity)
+    required: false
+    default: ""
+  repositories:
+    description: Optional comma-separated repository names to scope the token (e.g. cicd,commercial-rules)
+    required: false
+    default: ""
+
+outputs:
+  token:
+    description: Installation access token (valid ~1 hour)
+    value: ${{ steps.create_token.outputs.token }}
+  installation-id:
+    description: Installation ID used for this token
+    value: ${{ steps.create_token.outputs.installation-id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Create GitHub App installation token
+      id: create_token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: ${{ inputs.owner }}
+        repositories: ${{ inputs.repositories }}
